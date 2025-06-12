@@ -11,5 +11,5 @@ This repository contains custom plugins developed for Wendiloveee to enhance fun
 To use any of the plugins, clone this repository and follow the setup instructions within each plugin's directory.
 
 ```bash
-git clone https://github.com/yourusername/wendiloveee-custom-plugins.git
-cd wendiloveee-custom-plugins
+git clone https://github.com/bogbogu/wordpress-plugins.git
+cd wordpress-plugins
