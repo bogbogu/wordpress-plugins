@@ -1,0 +1,54 @@
+# MyFavSchool Currency Converter Plugin
+
+A lightweight and smart WordPress plugin developed for MyFavSchool Online School. This plugin automatically converts product prices based on the user's location, ensuring a localized shopping experience. It integrates **IPInfo** for geolocation and the **Currency Converter API** for real-time exchange rates.
+
+## 🔧 Features
+
+- Detects user location using IPInfo API  
+- Converts prices to local currency in real-time using Currency Converter API  
+- Seamlessly integrates with WooCommerce  
+- Simple setup with minimal configuration  
+- Lightweight and optimized for performance
+
+## 🧩 Installation
+
+1. Download and unzip the plugin files, or install directly from the WordPress plugin dashboard.
+2. Upload the plugin to the `/wp-content/plugins/` directory.
+3. Activate the plugin through the 'Plugins' menu in WordPress.
+4. Navigate to the plugin settings page under **Settings > Currency Converter**.
+5. Enter your:
+   - IPInfo API key
+   - Currency Converter API key
+
+## ⚙️ Usage
+
+Once configured, the plugin automatically:
+- Detects a user's country via their IP address
+- Fetches the latest exchange rates
+- Converts WooCommerce product prices to the user's local currency
+
+No additional shortcodes or widgets are required — it runs silently in the background to enhance the user experience.
+
+## 📦 Dependencies
+
+- [IPInfo.io](https://ipinfo.io/) – for geolocation
+- [Currency Converter API](https://app.currencyapi.com/) – for exchange rates
+
+## 🔐 API Keys
+
+To use this plugin, you’ll need:
+- A free or premium IPInfo API key: https://ipinfo.io/  
+- A Currency Converter API key: https://app.currencyapi.com/
+
+## 🧠 Notes
+
+- Prices are only converted visually for the user’s convenience. Backend prices and checkouts are still processed in your store's base currency unless otherwise configured.
+- The plugin respects WooCommerce's base currency and does not override transactional currency settings.
+
+## 📩 Support
+
+For any issues or feature requests, please contact the developer.
+
+---
+
+**Developed by [Benedict Ogbogu](mailto:ogbogubenedict@email.com)**  
