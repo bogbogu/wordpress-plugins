@@ -1,0 +1,77 @@
+/**
+ * All of the CSS for your public-facing functionality should be
+ * included in this file.
+ */
+
+.escrow-code-section {
+    margin: 20px 0;
+    padding: 15px;
+    background-color: #f8f8f8;
+    border: 1px solid #ddd;
+    border-radius: 3px;
+}
+
+.escrow-code-label {
+    display: block;
+    margin-bottom: 5px;
+    font-weight: bold;
+}
+
+.escrow-code-controls {
+    display: flex;
+    margin-bottom: 10px;
+}
+
+.escrow-code-input {
+    flex: 1;
+    margin-right: 10px;
+}
+
+.escrow-code-buttons {
+    display: flex;
+}
+
+.escrow-code-buttons button {
+    margin-right: 5px;
+}
+
+.escrow-code-message {
+    margin-top: 10px;
+}
+
+.escrow-code-message .success {
+    color: #0f834d;
+}
+
+.escrow-code-message .error {
+    color: #e2401c;
+}
+
+.escrow-info-notice {
+    padding: 10px 15px;
+    background-color: #f7f6f7;
+    border-top: 3px solid #6d6d6d;
+    margin-bottom: 15px;
+}
+
+/* Order received page transaction details */
+.payscrow-transaction-details {
+    margin: 20px 0;
+    padding: 15px;
+    background-color: #f8f8f8;
+    border: 1px solid #ddd;
+    border-radius: 3px;
+}
+
+.payscrow-transaction-details h4 {
+    margin-top: 0;
+    margin-bottom: 10px;
+    color: #333;
+}
+
+.payscrow-transaction-id {
+    font-family: monospace;
+    background: #eee;
+    padding: 3px 5px;
+    border-radius: 3px;
+}
