@@ -1,0 +1,20 @@
+## Klassified Escrow Gateway for WooCommerce
+
+This is a custom WordPress plugin that integrates the PayScrow escrow payment service into WooCommerce-powered stores.
+
+### Features
+- Secure escrow-based payment flow via PayScrow API
+- Vendor payout automation with percentage-based admin commissions
+- Supports manual or dynamic shipping methods (including Local Pickup)
+- Transaction logging and debug mode for troubleshooting
+- Designed for multivendor marketplaces
+
+### Setup
+1. Upload and activate the plugin in WordPress.
+2. Go to **WooCommerce > Settings > Payments > Klassified Escrow**.
+3. Fill in your PayScrow Broker API Key, admin account info, and other settings.
+4. Optionally enable debug mode to view request logs in `/wp-content/uploads/klassified-escrow-logs/`.
+
+### Security
+- No API keys are hardcoded.
+- Sensitive credentials are stored securely using WordPress options.
