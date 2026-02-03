@@ -162,6 +162,74 @@ class PayScrow_WC_Escrow_API {
     }
 
     /**
+     * Calculate charges via PayScrow server-side calculator
+     *
+     * Preferred to local math. Accepts an array with keys:
+     *  - items (array)
+     *  - currencyCode (string)
+     *  - merchantChargePercentage (float)
+     *  - escrowCode (optional)
+     *
+     * Returns array with parsed values: merchantCharge, customerCharge, totalCharge, grandTotalPayable and raw response under 'raw'
+     *
+     * @since 1.0.0
+     * @param array $payload
+     * @return array|WP_Error
+     */
+    public function calculate_charges($payload) {
+        if (!is_array($payload)) {
+            return new WP_Error('invalid_payload', 'Payload must be an array');
+        }
+
+        $items = isset($payload['items']) ? $payload['items'] : array();
+        $currency = isset($payload['currencyCode']) ? $payload['currencyCode'] : 'NGN';
+        $merchant_pct = isset($payload['merchantChargePercentage']) ? floatval($payload['merchantChargePercentage']) : 0.0;
+        $escrow_code = isset($payload['escrowCode']) ? $payload['escrowCode'] : null;
+
+        // Build query string for GET request (API expects GET). Items are JSON-encoded as a query param.
+        $query = array(
+            'currencyCode' => $currency,
+            'merchantChargePercentage' => $merchant_pct,
+        );
+
+        if (!empty($escrow_code)) {
+            $query['escrowCode'] = $escrow_code;
+        }
+
+        // Items may be complex - send as JSON in a parameter
+        $query['items'] = wp_json_encode($items);
+
+        $endpoint = 'marketplace/charges/calculate?' . http_build_query($query);
+
+        $response = $this->make_request('GET', $endpoint);
+        if (is_wp_error($response)) {
+            return $response;
+        }
+
+        // Normalize and extract expected fields safely
+        $merchantCharge = null;
+        $customerCharge = null;
+        $totalCharge = null;
+        $grandTotalPayable = null;
+
+        // Try top-level keys first, then nested data
+        if (is_array($response)) {
+            $merchantCharge = isset($response['merchantCharge']) ? floatval($response['merchantCharge']) : (isset($response['data']['merchantCharge']) ? floatval($response['data']['merchantCharge']) : null);
+            $customerCharge = isset($response['customerCharge']) ? floatval($response['customerCharge']) : (isset($response['data']['customerCharge']) ? floatval($response['data']['customerCharge']) : null);
+            $totalCharge = isset($response['totalCharge']) ? floatval($response['totalCharge']) : (isset($response['data']['totalCharge']) ? floatval($response['data']['totalCharge']) : null);
+            $grandTotalPayable = isset($response['grandTotalPayable']) ? floatval($response['grandTotalPayable']) : (isset($response['data']['grandTotalPayable']) ? floatval($response['data']['grandTotalPayable']) : null);
+        }
+
+        return array(
+            'merchantCharge' => $merchantCharge,
+            'customerCharge' => $customerCharge,
+            'totalCharge' => $totalCharge,
+            'grandTotalPayable' => $grandTotalPayable,
+            'raw' => $response
+        );
+    }
+
+    /**
      * Make an API request to PayScrow
      *
      * @since    1.0.0

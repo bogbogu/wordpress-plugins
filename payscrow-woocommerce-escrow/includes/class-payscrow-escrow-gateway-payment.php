@@ -518,29 +518,79 @@ class PayScrow_WC_Escrow_Payment
         // Create a unique reference with prefix to avoid collisions
         $unique_ref = 'KM' . $order->get_id() . 'T' . time();
 
-        // Calculate total item value for proper settlement distribution
-        $total_item_value = 0;
-        foreach ($items as $item) {
-            $total_item_value += $item['price'] * $item['quantity'];
+        // === SERVER-SIDE CHARGE CALCULATION ===
+        // Call PayScrow to calculate charges and authoritative totals before starting the transaction.
+        $calculate_payload = array(
+            'items' => $formatted_items,
+            'currencyCode' => $order->get_currency(),
+            'merchantChargePercentage' => (float)$admin_percentage
+        );
+
+        // Include escrow code (if any) so PayScrow can consider it; do NOT apply a local negative fee
+        $escrow_code = WC()->session ? WC()->session->get('escrow_code') : null;
+        if (!empty($escrow_code)) {
+            $calculate_payload['escrowCode'] = $escrow_code;
         }
 
-        // Ensure total_item_value has exactly 2 decimals
-        $total_item_value = floatval(number_format($total_item_value, 2, '.', ''));
+        $charges = $this->api->calculate_charges($calculate_payload);
+
+        if (is_wp_error($charges)) {
+            $error_message = $charges->get_error_message();
+
+            // Admin-level note
+            $order->add_order_note(__('PayScrow charge calculation failed: ', 'payscrow-woocommerce-escrow') . $error_message);
+
+            // User-friendly message
+            $user_message = __('Could not calculate final charges at this time. Please try again or contact support.', 'payscrow-woocommerce-escrow');
+            wc_add_notice($user_message, 'error');
+
+            // Log details for debugging
+            $this->log('Charge calculation error for order #' . $order->get_id() . ': ' . $error_message, true);
+            if ($charges instanceof WP_Error && $charges->get_error_data()) {
+                $this->log('Charge calculation error data: ' . print_r($charges->get_error_data(), true), true);
+            }
+
+            return new WP_Error('charge_calc_failed', $error_message);
+        }
+
+        // Persist server-calculated values in order meta
+        $merchantCharge = isset($charges['merchantCharge']) ? floatval($charges['merchantCharge']) : 0.0;
+        $customerCharge = isset($charges['customerCharge']) ? floatval($charges['customerCharge']) : 0.0;
+        $totalCharge = isset($charges['totalCharge']) ? floatval($charges['totalCharge']) : 0.0;
+        $grandTotalPayable = isset($charges['grandTotalPayable']) ? floatval($charges['grandTotalPayable']) : null;
+
+        $order->update_meta_data('_payscrow_total_payable', $grandTotalPayable);
+        $order->update_meta_data('_payscrow_merchant_charge', $merchantCharge);
+        $order->update_meta_data('_payscrow_customer_charge', $customerCharge);
+        $order->update_meta_data('_payscrow_total_charge', $totalCharge);
+
+        // Add a transparent order note summarizing server-calculated charges
+        $order->add_order_note(sprintf(__('PayScrow charges - Merchant: %s, Customer: %s, Total Charges: %s, Grand Total Payable: %s', 'payscrow-woocommerce-escrow'), wc_price($merchantCharge), wc_price($customerCharge), wc_price($totalCharge), $grandTotalPayable !== null ? wc_price($grandTotalPayable) : __('N/A', 'payscrow-woocommerce-escrow')));
+
+        // Use grandTotalPayable as authoritative customer total
+        if ($grandTotalPayable !== null) {
+            // We do not override the WC order total here; instead we base settlement distribution on server amounts.
+            // Net amount available for distribution to merchant/vendors/admin = grandTotalPayable - customerCharge - merchantCharge
+            $net_settlement_total = floatval(number_format($grandTotalPayable - $customerCharge - $merchantCharge, 2, '.', ''));
+            if ($net_settlement_total < 0) {
+                $net_settlement_total = 0.00;
+            }
+        } else {
+            // Fallback to previous local computation if server didn't return a total
+            $total_item_value = 0;
+            foreach ($items as $item) {
+                $total_item_value += $item['price'] * $item['quantity'];
+            }
+            $net_settlement_total = floatval(number_format($total_item_value, 2, '.', ''));
+        }
 
         if ($this->debug) {
-            $this->log("Total item value: " . $total_item_value);
+            $this->log("Net settlement total (server-derived): " . $net_settlement_total);
         }
 
-        // Calculate exact merchant (admin) amount
-        $admin_amount = floatval(number_format($total_item_value * ($admin_percentage / 100), 2, '.', ''));
-
-        // Calculate remaining amount for vendors (should be exactly total minus admin amount)
-        $vendor_amount = floatval(number_format($total_item_value - $admin_amount, 2, '.', ''));
-
-        if ($this->debug) {
-            $this->log("Admin amount: " . $admin_amount . " (" . $admin_percentage . "%)");
-            $this->log("Vendor amount: " . $vendor_amount);
-        }
+        // Compute admin amount based on the server-derived net merchant total
+        $admin_amount = floatval(number_format($net_settlement_total * ($admin_percentage / 100), 2, '.', ''));
+        $vendor_amount = floatval(number_format($net_settlement_total - $admin_amount, 2, '.', ''));
 
         // Create settlement accounts with correct values
         $formatted_settlement_accounts = array();
@@ -553,7 +603,7 @@ class PayScrow_WC_Escrow_Payment
             'amount' => $admin_amount
         );
 
-        // If we have only one vendor, add them with the entire vendor amount
+        // Distribute vendor shares from vendor_amount
         if (count($vendor_percentages) === 1) {
             $vendor_data = reset($vendor_percentages);
             $formatted_settlement_accounts[] = array(
@@ -562,9 +612,7 @@ class PayScrow_WC_Escrow_Payment
                 'bankCode' => $vendor_data['bankCode'],
                 'amount' => $vendor_amount
             );
-        }
-        // If we have multiple vendors, distribute proportionally
-        elseif (count($vendor_percentages) > 1) {
+        } elseif (count($vendor_percentages) > 1) {
             $remaining_vendor_amount = $vendor_amount;
             $vendor_count = count($vendor_percentages);
             $current_vendor = 0;
@@ -572,11 +620,9 @@ class PayScrow_WC_Escrow_Payment
             foreach ($vendor_percentages as $vendor_id => $vendor_data) {
                 $current_vendor++;
 
-                // For the last vendor, use the remaining amount to avoid rounding errors
                 if ($current_vendor === $vendor_count) {
                     $vendor_settlement_amount = $remaining_vendor_amount;
                 } else {
-                    // Calculate this vendor's proportion of the total vendor sales
                     $vendor_proportion = $vendor_data['total'] / $order_total;
                     $vendor_settlement_amount = floatval(number_format($vendor_amount * $vendor_proportion, 2, '.', ''));
                     $remaining_vendor_amount -= $vendor_settlement_amount;
@@ -591,17 +637,16 @@ class PayScrow_WC_Escrow_Payment
             }
         }
 
-        // Double-check that settlement totals exactly match item total
-        $settlement_total = 0;
+        // Verify settlement total equals expected net settlement total
+        $settlement_total = 0.0;
         foreach ($formatted_settlement_accounts as $account) {
-            $settlement_total += $account['amount'];
+            $settlement_total += floatval(number_format($account['amount'], 2, '.', ''));
         }
 
-        // Log verification
         if ($this->debug) {
-            $this->log("Settlement verification - Item total: " . $total_item_value . ", Settlement total: " . $settlement_total);
-            if (abs($total_item_value - $settlement_total) > 0.001) {
-                $this->log("WARNING: Settlement total does not match item total. Difference: " . ($total_item_value - $settlement_total));
+            $this->log("Settlement verification - Net settlement total: " . $net_settlement_total . ", Settlement total: " . $settlement_total);
+            if (abs($net_settlement_total - $settlement_total) > 0.001) {
+                $this->log("WARNING: Settlement total does not match server-derived net settlement total. Difference: " . ($net_settlement_total - $settlement_total), true);
             } else {
                 $this->log("Settlement verification passed - Amounts match exactly.");
             }
@@ -739,9 +784,13 @@ class PayScrow_WC_Escrow_Payment
             $discount_amount = floatval($escrow_code_data['amount']);
 
             if ($discount_amount > 0) {
+                // Do NOT apply negative fee locally to avoid mismatch with PayScrow server calculations.
+                // Instead, store the verified discount amount in session for transparency and future use
+                // and add a zero-valued fee to indicate the code is applied without changing totals.
+                WC()->session->set('escrow_code_applied_amount', $discount_amount);
                 $cart->add_fee(
-                    sprintf(__('Escrow Code Discount (%s)', 'payscrow-woocommerce-escrow'), $escrow_code),
-                    -$discount_amount,
+                    sprintf(__('Escrow Code Applied (%s)', 'payscrow-woocommerce-escrow'), $escrow_code),
+                    0.00,
                     false
                 );
             }
