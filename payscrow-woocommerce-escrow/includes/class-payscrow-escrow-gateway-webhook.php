@@ -95,10 +95,54 @@ class PayScrow_WC_Escrow_Webhook {
      * @param    WP_REST_Request    $request    Full details about the request.
      * @return   WP_REST_Response               Response object
      */
+    /**
+     * Process incoming webhook data
+     *
+     * Idempotency mechanism: to avoid re-processing duplicate webhooks we store a transient
+     * keyed by `transactionIdentifier|status` (prefer transactionNumber when available). If
+     * the same event is received again within the TTL it will be ignored. We also use a short
+     * "inflight" transient during processing to avoid race conditions.
+     *
+     * @since    1.0.0
+     * @param    WP_REST_Request    $request    Full details about the request.
+     * @return   WP_REST_Response               Response object
+     */
     public function process_webhook($request) {
+        // Early: Verify webhook signature using configured webhook secret (HMAC SHA256)
+        $settings = get_option('payscrow_wc_escrow_settings', array());
+        $webhook_secret = isset($settings['webhook_secret']) ? $settings['webhook_secret'] : '';
+
+        // Get raw body for signature verification
+        $raw_body = $request->get_body();
+
+        // Look for common signature headers (case-insensitive)
+        $signature = $request->get_header('x-payscrow-signature');
+        if (empty($signature)) {
+            $signature = $request->get_header('x-signature');
+        }
+
+        // Require a configured webhook secret to verify signatures
+        if (empty($webhook_secret) || empty($signature)) {
+            $this->log('Webhook verification failed: missing secret or signature header', true);
+            return new WP_REST_Response(array('status' => 'error', 'message' => 'Webhook verification failed'), 401);
+        }
+
+        // Some providers prefix signatures like "sha256=..."; accept that form
+        if (strpos($signature, 'sha256=') === 0) {
+            $signature = substr($signature, 7);
+        }
+
+        $expected = hash_hmac('sha256', $raw_body, $webhook_secret);
+
+        if (!hash_equals($expected, $signature)) {
+            // Don't log secrets; log a short prefix for diagnostics
+            $this->log('Webhook verification failed: invalid signature (prefix: ' . substr($signature, 0, 8) . ')', true);
+            return new WP_REST_Response(array('status' => 'error', 'message' => 'Invalid signature'), 401);
+        }
+
         // Log the webhook if debug is enabled
         if ($this->debug) {
-            $this->log('Webhook received: ' . print_r($request->get_params(), true));
+            $this->log('Webhook received and signature verified: ' . print_r($request->get_params(), true));
         }
         
         // Get the request body
@@ -147,12 +191,47 @@ class PayScrow_WC_Escrow_Webhook {
             }
         }
 
+        // === IDEMPOTENCY PROTECTION ===
+        // Use transactionNumber when available, otherwise fallback to transactionId for keying.
+        $identifier_for_key = !empty($transaction_number) ? $transaction_number : $transaction_id;
+        if (!empty($identifier_for_key)) {
+            $id_key_raw = $identifier_for_key . '|' . $status;
+            $id_key = 'payscrow_webhook_processed_' . md5($id_key_raw);
+            $inflight_key = $id_key . '_inflight';
+
+            // If already processed, return success (idempotent)
+            if (get_transient($id_key)) {
+                $this->log("Duplicate webhook ignored for identifier: " . $identifier_for_key);
+                return new WP_REST_Response(array(
+                    'status' => 'success',
+                    'message' => 'Duplicate webhook ignored'
+                ), 200);
+            }
+
+            // If another process is handling it, short-circuit
+            if (get_transient($inflight_key)) {
+                $this->log("Webhook already being processed (inflight) for identifier: " . $identifier_for_key);
+                return new WP_REST_Response(array(
+                    'status' => 'success',
+                    'message' => 'Webhook accepted (processing)'
+                ), 202);
+            }
+
+            // Set inflight marker for short time to prevent race conditions
+            set_transient($inflight_key, time(), 30);
+        }
+
         // Make sure status matches what we got in webhook
         if (isset($transaction_status['status']) && $transaction_status['status'] !== $status) {
             if ($this->debug) {
                 $this->log('Status mismatch. Webhook: ' . $status . ', API: ' . $transaction_status['status']);
             }
             
+            // Clear inflight marker on early exit
+            if (!empty($inflight_key)) {
+                delete_transient($inflight_key);
+            }
+
             return new WP_REST_Response(array(
                 'status' => 'error',
                 'message' => 'Status mismatch'
@@ -229,25 +308,32 @@ class PayScrow_WC_Escrow_Webhook {
                 $this->log('Order not found for transaction: ' . $transaction_id);
             }
             
+            // Clear inflight marker before returning
+            if (!empty($inflight_key)) {
+                delete_transient($inflight_key);
+            }
+
             return new WP_REST_Response(array(
                 'status' => 'error',
                 'message' => 'Order not found. Transaction ID: ' . $transaction_id
             ), 404);
         }
         
-        $order = $orders[0];
-
-        // If we obtained a transactionNumber during this webhook (or via status lookup) and the order
-        // does not yet have it, persist it for faster future lookups (lazy migration).
-        if (!empty($transaction_number)) {
-            $existing = $order->get_meta('_payscrow_transaction_number', true);
-            if (empty($existing)) {
-                $order->update_meta_data('_payscrow_transaction_number', $transaction_number);
-                $order->save();
-                $order->add_order_note(sprintf(__('PayScrow Transaction Number (migrated): %s', 'payscrow-woocommerce-escrow'), $transaction_number));
-                $this->log("Persisted transactionNumber $transaction_number for order #" . $order->get_id());
+// Perform processing in a try/catch to ensure inflight transient is cleared on unexpected errors
+        try {
+            $order = $orders[0];
+            
+            // If we obtained a transactionNumber during this webhook (or via status lookup) and the order
+            // does not yet have it, persist it for faster future lookups (lazy migration).
+            if (!empty($transaction_number)) {
+                $existing = $order->get_meta('_payscrow_transaction_number', true);
+                if (empty($existing)) {
+                    $order->update_meta_data('_payscrow_transaction_number', $transaction_number);
+                    $order->save();
+                    $order->add_order_note(sprintf(__('PayScrow Transaction Number (migrated): %s', 'payscrow-woocommerce-escrow'), $transaction_number));
+                    $this->log("Persisted transactionNumber $transaction_number for order #" . $order->get_id());
+                }
             }
-        }
         
         // Store escrow code if provided (HPOS-compatible)
         if (!empty($escrow_code)) {
@@ -300,12 +386,36 @@ class PayScrow_WC_Escrow_Webhook {
         if ($this->debug) {
             $this->log('Order #' . $order->get_id() . ' updated to ' . $status);
         }
-        
+
+        // Mark webhook as processed (idempotency) and clear inflight marker
+        if (!empty($identifier_for_key) && !empty($id_key)) {
+            // Persist that we've processed this event for 7 days
+            set_transient($id_key, time(), DAY_IN_SECONDS * 7);
+
+            // Remove inflight marker
+            if (!empty($inflight_key)) {
+                delete_transient($inflight_key);
+            }
+        }
+
         // Return success response
         return new WP_REST_Response(array(
             'status' => 'success',
             'message' => 'Webhook processed successfully'
         ), 200);
+        
+        } catch (Exception $e) {
+            // Ensure inflight marker is cleared if something unexpected happens
+            if (!empty($inflight_key)) {
+                delete_transient($inflight_key);
+            }
+
+            $this->log('Webhook processing exception: ' . $e->getMessage(), true);
+            return new WP_REST_Response(array(
+                'status' => 'error',
+                'message' => 'Webhook processing error'
+            ), 500);
+        }
     }
 
     /**

@@ -116,6 +116,19 @@ if (empty($options)) {
                         <p class="description api-key-description"><?php _e('Your PayScrow API key', 'payscrow-woocommerce-escrow'); ?></p>
                     </td>
                 </tr>
+                <tr>
+                    <th scope="row">
+                        <label for="payscrow_wc_escrow_settings_webhook_secret">
+                            <?php _e('Webhook Secret', 'payscrow-woocommerce-escrow'); ?>
+                        </label>
+                    </th>
+                    <td>
+                        <input type="password" id="payscrow_wc_escrow_settings_webhook_secret" 
+                               name="payscrow_wc_escrow_settings[webhook_secret]" 
+                               value="<?php echo esc_attr($options['webhook_secret']); ?>" />
+                        <p class="description"><?php _e('Secret used to verify webhook signatures (HMAC SHA256). Keep this private.', 'payscrow-woocommerce-escrow'); ?></p>
+                    </td>
+                </tr>
             </table>
         </div>
         

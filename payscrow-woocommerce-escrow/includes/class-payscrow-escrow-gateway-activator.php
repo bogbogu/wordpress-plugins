@@ -45,6 +45,7 @@ class PayScrow_WC_Escrow_Activator {
             'admin_account_number' => '',
             'admin_bank_code' => '',
             'broker_api_key' => '',
+            'webhook_secret' => '',
             'sandbox_mode' => 'yes',
             'admin_percentage' => '10',
             'debug_mode' => 'no',

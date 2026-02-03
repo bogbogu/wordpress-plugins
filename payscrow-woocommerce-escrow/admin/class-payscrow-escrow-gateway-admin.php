@@ -145,6 +145,8 @@ class PayScrow_WC_Escrow_Admin {
         $validated['admin_account_number'] = sanitize_text_field($input['admin_account_number']);
         $validated['admin_bank_code'] = sanitize_text_field($input['admin_bank_code']);
         $validated['broker_api_key'] = sanitize_text_field($input['broker_api_key']);
+        // Webhook secret (optional but required for secure processing)
+        $validated['webhook_secret'] = isset($input['webhook_secret']) ? sanitize_text_field($input['webhook_secret']) : '';
         
         // Number fields
         $admin_percentage = floatval($input['admin_percentage']);
