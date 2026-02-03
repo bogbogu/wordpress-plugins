@@ -81,11 +81,11 @@ class PayScrow_WC_Escrow_Webhook {
      * @since    1.0.0
      */
     public function register_webhook_endpoint() {
-        register_rest_route('payscrow/escrow/v1', '/webhook', array({
+        register_rest_route( 'payscrow/escrow/v1', '/webhook', array(
             'methods'  => 'POST',
-            'callback' => array($this, 'process_webhook'),
-            'permission_callback' => '__return_true'
-        ));
+            'callback' => array( $this, 'process_webhook' ),
+            'permission_callback' => '__return_true',
+        ) );
     }
 
     /**
