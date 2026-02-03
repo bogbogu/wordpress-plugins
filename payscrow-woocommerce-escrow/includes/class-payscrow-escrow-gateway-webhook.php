@@ -162,7 +162,12 @@ class PayScrow_WC_Escrow_Webhook {
         $status = sanitize_text_field($payload['status']);
         $escrow_code = isset($payload['escrowCode']) ? sanitize_text_field($payload['escrowCode']) : '';
         $external_reference = isset($payload['externalReference']) ? sanitize_text_field($payload['externalReference']) : '';
-        
+
+        // Normalize status and escrowStatus for idempotency keys. Providers may vary formatting (e.g., "In Progress", "inprogress").
+        // Preserve raw $status / $escrow_status_raw for order notes and business logic; normalized versions are for key generation only.
+        $escrow_status_raw = isset($payload['escrowStatus']) ? sanitize_text_field($payload['escrowStatus']) : '';
+        $normalized_status = preg_replace('/\s+/', '', strtolower(trim($status)));
+        $normalized_escrow_status = !empty($escrow_status_raw) ? preg_replace('/\s+/', '', strtolower(trim($escrow_status_raw))) : '';        
         // Decide which identifier to use when verifying with the API (prefer transactionNumber)
         $identifier_for_status = !empty($transaction_number) ? $transaction_number : $transaction_id;
 
@@ -195,13 +200,18 @@ class PayScrow_WC_Escrow_Webhook {
         // Use transactionNumber when available, otherwise fallback to transactionId for keying.
         $identifier_for_key = !empty($transaction_number) ? $transaction_number : $transaction_id;
         if (!empty($identifier_for_key)) {
-            $id_key_raw = $identifier_for_key . '|' . $status;
+            // Build idempotency key using normalized status (and normalized escrow status if present)
+            // Normalization ensures identical events are deduplicated even if the provider varies formatting.
+            $id_key_raw = $identifier_for_key . '|' . $normalized_status;
+            if (!empty($normalized_escrow_status)) {
+                $id_key_raw .= '|' . $normalized_escrow_status;
+            }
             $id_key = 'payscrow_webhook_processed_' . md5($id_key_raw);
             $inflight_key = $id_key . '_inflight';
 
             // If already processed, return success (idempotent)
             if (get_transient($id_key)) {
-                $this->log("Duplicate webhook ignored for identifier: " . $identifier_for_key);
+                $this->log("Duplicate webhook ignored for identifier: " . $identifier_for_key . ' status: ' . $normalized_status);
                 return new WP_REST_Response(array(
                     'status' => 'success',
                     'message' => 'Duplicate webhook ignored'
