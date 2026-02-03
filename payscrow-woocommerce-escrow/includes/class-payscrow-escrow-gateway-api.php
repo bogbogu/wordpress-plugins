@@ -105,13 +105,18 @@ class PayScrow_WC_Escrow_API {
     /**
      * Get transaction status
      *
+     * Preferred identifier: transactionNumber (e.g., "MKT-00012345").
+     * This method accepts either a transactionNumber (preferred) or a transactionId (GUID) and uses
+     * the provided identifier to query the /status endpoint. Using transactionNumber is recommended
+     * for broker operations as it is the canonical, broker-facing identifier returned by /start.
+     *
      * @since    1.0.0
-     * @param    string    $transaction_id    Transaction ID to check
+     * @param    string    $identifier    TransactionNumber (preferred) or transactionId (GUID)
      * @return   array|WP_Error               Response data or WP_Error
      */
-    public function get_transaction_status($transaction_id) {
-        // Updated for v3 API format
-        $endpoint = 'marketplace/transactions/' . $transaction_id . '/status';
+    public function get_transaction_status($identifier) {
+        // Build endpoint using the identifier supplied. Prefer transactionNumber when available.
+        $endpoint = 'marketplace/transactions/' . $identifier . '/status';
         return $this->make_request('GET', $endpoint);
     }
 
@@ -131,18 +136,28 @@ class PayScrow_WC_Escrow_API {
     /**
      * Apply escrow code
      *
+     * Accepts either transactionNumber (preferred) or transactionId (GUID). When a transactionNumber
+     * is supplied it will be sent as `transactionNumber` per API docs; otherwise we send `transactionId`.
+     *
      * @since    1.0.0
-     * @param    string    $transaction_id    Transaction ID
+     * @param    string    $identifier        TransactionNumber (preferred) or transactionId (GUID)
      * @param    string    $escrow_code       Escrow code to apply
      * @return   array|WP_Error               Response data or WP_Error
      */
-    public function apply_escrow_code($transaction_id, $escrow_code) {
+    public function apply_escrow_code($identifier, $escrow_code) {
         // Updated for v3 API format
         $endpoint = 'marketplace/transactions/apply-code';
         $data = array(
-            'transactionId' => $transaction_id,
             'code' => $escrow_code
         );
+
+        // Prefer transactionNumber when it looks like a broker transaction number (e.g., MKT-...)
+        if (is_string($identifier) && preg_match('/^MKT-/', $identifier)) {
+            $data['transactionNumber'] = $identifier;
+        } else {
+            $data['transactionId'] = $identifier;
+        }
+
         return $this->make_request('POST', $endpoint, $data);
     }
 

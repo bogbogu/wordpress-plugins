@@ -211,21 +211,26 @@ class PayScrow_WC_Escrow_Payment
         // Check for different response formats - PayScrow might return different formats
         $payment_link = null;
         $transaction_id = null;
+        $transaction_number = null; // Canonical broker identifier (MKT-...)
 
-        // Try to extract payment link and transaction ID from response
+        // Try to extract payment link and transaction identifiers from response
         if (!empty($response['paymentLink'])) {
             $payment_link = $response['paymentLink'];
-            $transaction_id = !empty($response['transactionNo']) ? $response['transactionNo'] : null;
+            $transaction_number = !empty($response['transactionNumber']) ? $response['transactionNumber'] : (!empty($response['transactionNo']) ? $response['transactionNo'] : null);
+            $transaction_id = !empty($response['transactionId']) ? $response['transactionId'] : null;
         } elseif (!empty($response['redirectUrl'])) {
             $payment_link = $response['redirectUrl'];
+            $transaction_number = !empty($response['transactionNumber']) ? $response['transactionNumber'] : null;
             $transaction_id = !empty($response['transactionId']) ? $response['transactionId'] : null;
         } elseif (!empty($response['data']) && is_array($response['data'])) {
             // Some APIs nest the data
             if (!empty($response['data']['paymentLink'])) {
                 $payment_link = $response['data']['paymentLink'];
-                $transaction_id = !empty($response['data']['transactionNo']) ? $response['data']['transactionNo'] : null;
+                $transaction_number = !empty($response['data']['transactionNumber']) ? $response['data']['transactionNumber'] : (!empty($response['data']['transactionNo']) ? $response['data']['transactionNo'] : null);
+                $transaction_id = !empty($response['data']['transactionId']) ? $response['data']['transactionId'] : null;
             } elseif (!empty($response['data']['redirectUrl'])) {
                 $payment_link = $response['data']['redirectUrl'];
+                $transaction_number = !empty($response['data']['transactionNumber']) ? $response['data']['transactionNumber'] : null;
                 $transaction_id = !empty($response['data']['transactionId']) ? $response['data']['transactionId'] : null;
             }
         }
@@ -242,18 +247,28 @@ class PayScrow_WC_Escrow_Payment
             return;
         }
 
-        // Store transaction ID in order meta (compatible with HPOS)
+        // Store transaction identifiers in order meta (compatible with HPOS)
+        if (!empty($transaction_number)) {
+            // transactionNumber is the canonical broker identifier (e.g., MKT-00012345)
+            $order->update_meta_data('_payscrow_transaction_number', $transaction_number);
+            $order->add_order_note(sprintf(__('PayScrow Transaction Number: %s', 'payscrow-woocommerce-escrow'), $transaction_number));
+            $this->log("Stored transaction number $transaction_number for order #$order_id");
+        }
+
         if (!empty($transaction_id)) {
             $order->update_meta_data('_payscrow_transaction_id', $transaction_id);
-            $order->save();
             $order->add_order_note(sprintf(__('PayScrow Transaction ID: %s', 'payscrow-woocommerce-escrow'), $transaction_id));
             $this->log("Stored transaction ID $transaction_id for order #$order_id");
-        } else {
-            // Still store the raw response if we couldn't find a transaction ID
-            $order->update_meta_data('_payscrow_response', json_encode($response));
-            $order->save();
-            $this->log("No transaction ID found in response for order #$order_id", true);
         }
+
+        if (empty($transaction_number) && empty($transaction_id)) {
+            // Still store the raw response if we couldn't find an identifier
+            $order->update_meta_data('_payscrow_response', json_encode($response));
+            $this->log("No transaction identifier found in response for order #$order_id", true);
+        }
+
+        // Save after meta updates
+        $order->save();
 
         // Update order status to pending payment
         $order->update_status('pending', __('Awaiting escrow payment', 'payscrow-woocommerce-escrow'));

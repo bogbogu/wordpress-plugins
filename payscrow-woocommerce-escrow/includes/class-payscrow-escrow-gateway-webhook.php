@@ -104,7 +104,8 @@ class PayScrow_WC_Escrow_Webhook {
         // Get the request body
         $payload = $request->get_json_params();
         
-        if (empty($payload) || !isset($payload['transactionId']) || !isset($payload['status'])) {
+        // Accept payloads that contain either transactionNumber (preferred) or transactionId (fallback)
+        if (empty($payload) || (!isset($payload['transactionId']) && !isset($payload['transactionNumber'])) || !isset($payload['status'])) {
             return new WP_REST_Response(array(
                 'status' => 'error',
                 'message' => 'Invalid payload'
@@ -112,13 +113,17 @@ class PayScrow_WC_Escrow_Webhook {
         }
         
         // Get transaction details
-        $transaction_id = sanitize_text_field($payload['transactionId']);
+        $transaction_number = isset($payload['transactionNumber']) ? sanitize_text_field($payload['transactionNumber']) : '';
+        $transaction_id = isset($payload['transactionId']) ? sanitize_text_field($payload['transactionId']) : '';
         $status = sanitize_text_field($payload['status']);
         $escrow_code = isset($payload['escrowCode']) ? sanitize_text_field($payload['escrowCode']) : '';
         $external_reference = isset($payload['externalReference']) ? sanitize_text_field($payload['externalReference']) : '';
         
+        // Decide which identifier to use when verifying with the API (prefer transactionNumber)
+        $identifier_for_status = !empty($transaction_number) ? $transaction_number : $transaction_id;
+
         // Verify transaction status with API
-        $transaction_status = $this->api->get_transaction_status($transaction_id);
+        $transaction_status = $this->api->get_transaction_status($identifier_for_status);
         
         if (is_wp_error($transaction_status)) {
             if ($this->debug) {
@@ -130,7 +135,18 @@ class PayScrow_WC_Escrow_Webhook {
                 'message' => 'Failed to verify transaction status'
             ), 500);
         }
-        
+
+        // If we only had a transactionId and API returned a transactionNumber, lazy-migrate it
+        if (empty($transaction_number)) {
+            if (!empty($transaction_status['transactionNumber'])) {
+                $transaction_number = sanitize_text_field($transaction_status['transactionNumber']);
+                $this->log("Lazy-migrated transactionNumber from status API: $transaction_number", true);
+            } elseif (!empty($transaction_status['data']['transactionNumber'])) {
+                $transaction_number = sanitize_text_field($transaction_status['data']['transactionNumber']);
+                $this->log("Lazy-migrated transactionNumber from status API (nested data): $transaction_number", true);
+            }
+        }
+
         // Make sure status matches what we got in webhook
         if (isset($transaction_status['status']) && $transaction_status['status'] !== $status) {
             if ($this->debug) {
@@ -143,17 +159,34 @@ class PayScrow_WC_Escrow_Webhook {
             ), 400);
         }
         
-        // Look for transaction reference in multiple metadata fields
-        $orders = wc_get_orders(array(
-            'meta_query' => array(
-                array(
-                    'key'     => '_payscrow_transaction_id',
-                    'value'   => $transaction_id,
-                    'compare' => '='
-                )
-            ),
-            'limit'      => 1
-        ));
+        // Lookup order by _payscrow_transaction_number first (canonical)
+        $orders = array();
+        if (!empty($transaction_number)) {
+            $orders = wc_get_orders(array(
+                'meta_query' => array(
+                    array(
+                        'key'     => '_payscrow_transaction_number',
+                        'value'   => $transaction_number,
+                        'compare' => '='
+                    )
+                ),
+                'limit'      => 1
+            ));
+        }
+
+        // If not found by number, fall back to transaction_id meta
+        if (empty($orders) && !empty($transaction_id)) {
+            $orders = wc_get_orders(array(
+                'meta_query' => array(
+                    array(
+                        'key'     => '_payscrow_transaction_id',
+                        'value'   => $transaction_id,
+                        'compare' => '='
+                    )
+                ),
+                'limit'      => 1
+            ));
+        }
         
         // If not found, try to extract order ID from transaction reference
         if (empty($orders)) {
@@ -203,6 +236,18 @@ class PayScrow_WC_Escrow_Webhook {
         }
         
         $order = $orders[0];
+
+        // If we obtained a transactionNumber during this webhook (or via status lookup) and the order
+        // does not yet have it, persist it for faster future lookups (lazy migration).
+        if (!empty($transaction_number)) {
+            $existing = $order->get_meta('_payscrow_transaction_number', true);
+            if (empty($existing)) {
+                $order->update_meta_data('_payscrow_transaction_number', $transaction_number);
+                $order->save();
+                $order->add_order_note(sprintf(__('PayScrow Transaction Number (migrated): %s', 'payscrow-woocommerce-escrow'), $transaction_number));
+                $this->log("Persisted transactionNumber $transaction_number for order #" . $order->get_id());
+            }
+        }
         
         // Store escrow code if provided (HPOS-compatible)
         if (!empty($escrow_code)) {
