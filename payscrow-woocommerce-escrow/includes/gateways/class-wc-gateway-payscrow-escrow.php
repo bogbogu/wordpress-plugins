@@ -27,6 +27,14 @@ class WC_Gateway_PayScrow_Escrow extends WC_Payment_Gateway
 {
 
     /**
+     * Processor class used to handle payments.
+     *
+     * @since 1.0.0
+     * @var string $processor_class
+     */
+    protected $processor_class;
+
+    /**
      * Constructor for the gateway
      */
     public function __construct()
